@@ -1,0 +1,360 @@
+// Evapotranspiration and Crop Water Stress Monitoring Using MODIS Dataset in Google Earth Engine
+
+// 1. Define a point of interest for analysis
+var locationCoordinates = [99.6969069048778, 17.64899608036993];
+var pointOfInterest = ee.Geometry.Point(locationCoordinates);
+var Basin = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_5")
+Map.addLayer(Basin, {}, 'Basins'); 
+
+// 2. Load the WWF/HydroSHEDS feature collection and filter it to the region of interest (ROI)
+// var roiBasin = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_5")
+//   .filterBounds(pointOfInterest);
+// roiBasin filters the WWF/HydroSHEDS dataset to focus on the basin that contains the point of interest
+
+Map.centerObject(roiBasin,6);
+Map.addLayer(roiBasin, {}, 'Basin ROI');
+ 
+// 3. Load the MODIS Evapotranspiration (ET) and Potential Evapotranspiration (PET) dataset
+var startDate = '2001', endDate = '2024';
+var modisEtCollection = ee.ImageCollection("MODIS/061/MOD16A2GF")
+  .select('ET', 'PET') // Select ET and PET bands
+  .filterDate(startDate, endDate); // Filter the dataset for the date range
+
+// 4. Calculate mean Evapotranspiration (ET) over the entire period
+var meanEt = modisEtCollection.select('ET').mean().multiply(0.1); // Convert to correct units
+// meanEt calculates the average ET over the entire time period and multiplies by 0.1 to convert units from tenths of millimeters.
+
+Map.addLayer(meanEt.clip(roiBasin), {min: 0, max: 15, palette: ['blue', 'green', 'yellow', 'red']}, 'Mean ET (2001-2024)', false);
+// 4.1 Calculate mean (PET)
+var meanPEt = modisEtCollection.select('PET').mean().multiply(0.1); // Convert to correct units
+// meanPEt calculates the average PET over the entire time period and multiplies by 0.1 to convert units from tenths of millimeters.
+
+Map.addLayer(meanPEt.clip(roiBasin), {min: 22, max: 70, palette: ['white','blue', 'green', 'yellow', 'red']}, 'Mean PET (2001-2024)', false);
+// 5. Calculate mean ET for the summer season (June, July, August)
+var summerEt = modisEtCollection.select('ET')
+  .filter(ee.Filter.calendarRange(6, 8, 'month')) // Filter images for the summer months // Calculates the ET during the summer months (June, July, August).
+  .mean().multiply(0.1); // Convert to correct units (mm)
+Map.addLayer(summerEt.clip(roiBasin), {min: 0, max: 20, palette: ['blue', 'green', 'yellow', 'red']}, 'Summer ET', false);
+
+// 6. Export the mean ET image to Google Drive
+Export.image.toDrive({
+  image: meanEt.clip(roiBasin), 
+  description: 'Mean_ET_2001_2024', 
+  region: roiBasin, 
+  scale: 500,
+  crs: meanEt.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+
+// 7. Compute Crop Water Stress Index (CWSI) using the equation: CWSI = 1 - (ET / PET)
+var cwsiCollection = modisEtCollection.map(function(image) {
+  var cwsiEquation = image.expression('1 - (et / pet)', {
+    'et': image.select('ET').multiply(0.1), // ET in mm
+    'pet': image.select('PET').multiply(0.1) // PET in mm
+  });
+  return cwsiEquation.rename('CWSI')
+    .copyProperties(image, ['system:time_start', 'system:time_end']); // Retain time properties
+});
+// This function computes the CWSI for each image in the MODIS dataset using the formula CWSI = 1 - (ET / PET).
+
+// 8. Calculate the mean CWSI across the time period
+var meanCwsi = cwsiCollection.mean();
+Map.addLayer(meanCwsi.clip(roiBasin), {min: 0, max: 1, palette: ['green', 'yellow', 'red']}, 'Mean CWSI', false);
+
+// 9. Load MODIS Land Cover dataset and select the crop area
+var landCover = ee.ImageCollection("MODIS/061/MCD12Q1")
+  .select('LC_Type1').mode(); // Get the most common land cover type //LC_Type2
+var cropArea = landCover.eq(12); // Select the crop areas (class 12)
+// Loads the MODIS land cover dataset and identifies areas classified as cropland (class 12).
+
+// Add the cropland areas to the map with a color palette
+Map.addLayer(cropArea.clip(roiBasin), 
+             {min: 0, max: 1, palette: ['green', 'red']}, 
+             'Crop Areas', false);
+
+// Add another version with a different palette if needed
+Map.addLayer(cropArea.clip(roiBasin), 
+             {min: 0, max: 1, palette: ['yellow', 'blue']}, 
+             'Crop Areas2');
+// 10. Mask the CWSI to show only crop areas
+var cwsiForCrops = meanCwsi.updateMask(cropArea);
+Map.addLayer(cwsiForCrops.clip(roiBasin), {min: 0, max: 1, palette: ['green', 'yellow', 'red']}, 'CWSI for Crops', false);
+
+// Define the threshold value
+var threshold = 0.8;
+
+// Apply the mask to keep only values greater than the threshold
+var cwsiMasked = cwsiForCrops.updateMask(cwsiForCrops.gt(threshold));
+
+// Add the masked layer to the map, clipping it to the region of interest
+Map.addLayer(cwsiMasked.clip(roiBasin), {min: 0.8, max: 1, palette: ['yellow', 'red']}, 'CWSI > 0.8', false);
+
+// Filters the CWSI data to display only cropland areas
+
+
+//////////////////////////
+
+
+
+
+Export.image.toDrive({
+  image: summerEt.clip(roiBasin),
+  description: 'Summer_ET_2001_2024',
+  region: roiBasin,
+  scale: 500,
+  crs: summerEt.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+//2. Export Mean Crop Water Stress Index (CWSI)
+
+Export.image.toDrive({
+  image: meanCwsi.clip(roiBasin),
+  description: 'Mean_CWSI_2001_2024',
+  region: roiBasin,
+  scale: 500,
+  crs: meanCwsi.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+
+//3. Export Cropland Mask
+
+Export.image.toDrive({
+  image: cropArea.clip(roiBasin),
+  description: 'MODIS_Cropland_Mask',
+  region: roiBasin,
+  scale: 500,
+  crs: cropArea.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+ //4. Export Cropland-Only CWSI
+ Export.image.toDrive({
+  image: cwsiForCrops.clip(roiBasin),
+  description: 'CWSI_Croplands_Only',
+  region: roiBasin,
+  scale: 500,
+  crs: cwsiForCrops.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+//5. Export High-Stress Cropland Areas (CWSI > 0.8)
+Export.image.toDrive({
+  image: cwsiMasked.clip(roiBasin),
+  description: 'High_Stress_Crops_CWSI_gt_0_8',
+  region: roiBasin,
+  scale: 500,
+  crs: cwsiMasked.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+// ////////////////
+
+// // 9. Temporal Trend Analysis using Linear Regression
+
+// // Define etWithTime and cwsiWithTime
+// var etWithTime = modisEtCollection.select('ET')
+//   .map(function(image) {
+//     return image.multiply(0.1)
+//       .set('date', image.get('system:time_start'));
+//   });
+
+// var cwsiWithTime = cwsiCollection
+//   .map(function(image) {
+//     return image.set('date', image.get('system:time_start'));
+//   });
+
+// // Function to add time band
+// var addTimeBand = function(collection) {
+//   var firstDate = ee.Date(startDate + '-01-01');
+//   return collection.map(function(image) {
+//     var date = ee.Date(image.get('date'));
+//     var time = date.difference(firstDate, 'year');
+//     var timeImage = ee.Image.constant(time).rename('time').toFloat();
+//     return image.addBands(timeImage);
+//   });
+// };
+
+
+// var etWithTimeBand = addTimeBand(etWithTime)
+//   .cast({ 'ET': 'float', 'time': 'float' }, ['time', 'ET']);
+// var cwsiWithTimeBand = addTimeBand(etWithTime)
+//   .cast({ 'ET': 'float', 'time': 'float' }, ['time', 'CWSI']);
+
+// // Perform linear regression
+// var etRegression = etWithTimeBand.select(['time', 'ET'])
+//   .reduce(ee.Reducer.linearFit())
+//   .clip(roiBasin);
+
+// var cwsiRegression = cwsiWithTimeBand.select(['time', 'CWSI'])
+//   .reduce(ee.Reducer.linearFit())
+//   .clip(roiBasin);
+
+// // Display trend maps
+// Map.addLayer(etRegression.select('scale'), {min: -0.5, max: 0.5, palette: ['blue', 'white', 'red']}, 'ET Trend (mm/year)');
+// Map.addLayer(cwsiRegression.select('scale'), {min: -0.05, max: 0.05, palette: ['blue', 'white', 'red']}, 'CWSI Trend (per year)');
+
+// // Export trend layers
+// Export.image.toDrive({
+//   image: etRegression.select(['scale', 'offset']),
+//   description: 'ET_Trend_2001_2024',
+//   region: roiBasin,
+//   scale: 500,
+//   folder: 'evapotranspiration_analysis',
+//   maxPixels: 1e13
+// });
+
+// Export.image.toDrive({
+//   image: cwsiRegression.select(['scale', 'offset']),
+//   description: 'CWSI_Trend_2001_2024',
+//   region: roiBasin,
+//   scale: 500,
+//   folder: 'evapotranspiration_analysis',
+//   maxPixels: 1e13
+// });
+
+
+// 9. Temporal Trend Analysis using Linear Regression
+
+// Define etWithTime and cwsiWithTime
+var etWithTime = modisEtCollection.select('ET')
+  .map(function(image) {
+    return image.multiply(0.1)
+      .set('date', image.get('system:time_start'));
+  });
+
+var cwsiWithTime = cwsiCollection
+  .map(function(image) {
+    return image.set('date', image.get('system:time_start'));
+  });
+
+// Function to add time band
+var addTimeBand = function(collection) {
+  var firstDate = ee.Date(startDate + '-01-01');
+  return collection.map(function(image) {
+    var date = ee.Date(image.get('date'));
+    var time = date.difference(firstDate, 'year');
+    var timeImage = ee.Image.constant(time).rename('time').toFloat();
+    return image.addBands(timeImage);
+  });
+};
+
+// Apply to ET and CWSI collections
+var etWithTimeBand = addTimeBand(etWithTime)
+  .cast({ 'ET': 'float', 'time': 'float' }, ['time', 'ET']);
+
+var cwsiWithTimeBand = addTimeBand(cwsiWithTime)
+  .cast({ 'CWSI': 'float', 'time': 'float' }, ['time', 'CWSI']);
+
+// Perform linear regression
+var etRegression = etWithTimeBand.select(['time', 'ET'])
+  .reduce(ee.Reducer.linearFit())
+  .clip(roiBasin);
+
+var cwsiRegression = cwsiWithTimeBand.select(['time', 'CWSI'])
+  .reduce(ee.Reducer.linearFit())
+  .clip(roiBasin);
+
+// Display trend maps
+Map.addLayer(etRegression.select('scale'), {min: -0.007, max:0.1, palette:  ['darkblue', 'blue', 'lightblue', 'white', 'pink', 'orange', ]}, 'ET Trend (mm/year)');
+Map.addLayer(cwsiRegression.select('scale'), {min: -0.044, max: 0.001, palette: [ 'pink',  'lightblue', 'deepskyblue', 'darkblue']}, 'CWSI Trend (per year)');
+
+// Export ET trend
+Export.image.toDrive({
+  image: etRegression.select('slope'),
+  description: 'ET_Trend_2001_2024',
+  region: roiBasin,
+  scale: 500,
+  crs: cwsiForCrops.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+
+
+// Export CWSI trend
+Export.image.toDrive({
+  image: cwsiRegression.select('scale'),
+  description: 'CWSI_Trend_2001_2024',
+  region: roiBasin,
+  scale: 500,
+  crs: cwsiForCrops.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+// Export ET Trend (slope)
+Export.image.toDrive({
+  image: etRegression.select('scale'),
+  description: 'ET_Trend_2001_2024b',
+  region: roiBasin,
+  scale: 500,
+  crs: cwsiForCrops.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+
+// Export CWSI Trend (slope)
+Export.image.toDrive({
+  image: cwsiRegression.select('scale'),
+  description: 'CWSI_Trend_2001_2024b',
+  region: roiBasin,
+  scale: 500,
+  crs: cwsiForCrops.projection().crs().getInfo(),
+  maxPixels: 1e13,
+  folder: 'evapotranspiration_analysis'
+});
+///////////////////////
+
+
+
+
+
+
+// Chart ET over time for the ROI
+var etChart = ui.Chart.image.series({
+  imageCollection: etWithTime,
+  region: roiBasin,
+  reducer: ee.Reducer.mean(),
+  scale: 500,
+  xProperty: 'date'
+}).setOptions({
+  title: 'Mean ET Trend (2001-2024)',
+  hAxis: {title: 'Year'},
+  vAxis: {title: 'Mean ET (mm)'}
+});
+
+// Print the chart
+print(etChart);
+
+
+
+// Extract the slope and intercept from the ET regression
+var slope = etRegression.select('scale'); // slope = trend
+var intercept = etRegression.select('offset'); // intercept
+
+// Create a time image for visualization
+var firstDate = ee.Date(startDate + '-01-01');
+var lastDate = ee.Date(endDate + '-12-31');
+//var years = lastDate.difference(firstDate, 'year').get('value');
+var years = lastDate.difference(firstDate, 'year'); // ✅ ee.Number
+// Generate a fitted trend image
+var trendImage = slope.multiply(ee.Image(years)).add(intercept);
+
+// Display the trend line
+Map.addLayer(trendImage.clip(roiBasin), {min: 0, max: 10, palette: ['blue', 'green', 'red']}, 'ET Trend Line');
+
+// Chart the trend line over time
+var trendChart = ui.Chart.image.series({
+  imageCollection: etWithTimeBand,
+  region: roiBasin,
+  reducer: ee.Reducer.linearFit(),
+  scale: 500, 
+  xProperty: 'date'
+}).setOptions({
+  title: 'ET Trend with Linear Regression',
+  hAxis: {title: 'Year'},
+  vAxis: {title: 'ET Trend (mm/year)'}
+});
+
+print(trendChart);
