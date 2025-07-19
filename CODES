@@ -1,7 +1,7 @@
 // Evapotranspiration and Crop Water Stress Monitoring Using MODIS Dataset in Google Earth Engine
 
 // 1. Define a point of interest for analysis
-var locationCoordinates = [99.6969069048778, 17.64899608036993];
+var locationCoordinates = [69.18298712626188,27.920779067372642];
 var pointOfInterest = ee.Geometry.Point(locationCoordinates);
 var Basin = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_5")
 Map.addLayer(Basin, {}, 'Basins'); 
